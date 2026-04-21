@@ -24,14 +24,6 @@ static HMODULE g_hModule = nullptr;
 static std::unordered_set<UINT_PTR> g_musicBinBuffers;
 static bool g_inPluginNotify = false;
 
-static int get_view_for_buffer(UINT_PTR bufferID) {
-  HWND npp = g_npp._nppHandle;
-  int pos = static_cast<int>(SendMessage(npp, NPPM_GETPOSFROMBUFFERID, static_cast<WPARAM>(bufferID), MAIN_VIEW));
-  if (pos < 0) pos = static_cast<int>(SendMessage(npp, NPPM_GETPOSFROMBUFFERID, static_cast<WPARAM>(bufferID), SUB_VIEW));
-  if (pos < 0) return MAIN_VIEW;
-  return static_cast<int>(static_cast<unsigned>(pos) >> 30);
-}
-
 static bool restore_last_write_time(const wchar_t* path, const FILETIME& ft) {
   HANDLE h = CreateFileW(path, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
                          FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -125,12 +117,10 @@ static void set_buffer_utf8_text(UINT_PTR bufferID, const std::string& utf8) {
   SendMessage(sci, SCI_SETCODEPAGE, static_cast<WPARAM>(SC_CP_UTF8), 0);
   SendMessage(sci, SCI_SETTEXT, 0, reinterpret_cast<LPARAM>(utf8.c_str()));
   SendMessage(g_npp._nppHandle, NPPM_SETBUFFERLANGTYPE, static_cast<WPARAM>(bufferID), static_cast<LPARAM>(NPP_L_JSON));
-  const int view = get_view_for_buffer(bufferID);
-  SendMessage(g_npp._nppHandle, NPPM_ENCODESCI, static_cast<WPARAM>(view), 0);
   sci = current_scintilla();
   SendMessage(sci, SCI_SETUNDOCOLLECTION, static_cast<WPARAM>(TRUE), 0);
-  SendMessage(sci, SCI_SETSAVEPOINT, 0, 0);
   SendMessage(sci, SCI_EMPTYUNDOBUFFER, 0, 0);
+  SendMessage(sci, SCI_SETSAVEPOINT, 0, 0);
   SendMessage(sci, SCI_SETCHANGEHISTORY, static_cast<WPARAM>(change_history_flags), 0);
 }
 
