@@ -90,12 +90,10 @@
   <ItemGroup>
     <ClCompile Include="src\plugin_main.cpp" />
     <ClCompile Include="src\musicdata_io.cpp" />
-    <ClCompile Include="third_party\cJSON.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\musicdata_io.h" />
     <ClInclude Include="src\npp_defs.h" />
-    <ClInclude Include="third_party\cJSON.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

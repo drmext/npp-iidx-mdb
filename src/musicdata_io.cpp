@@ -1,12 +1,12 @@
 #include "musicdata_io.h"
 
-#include "../third_party/cJSON.h"
-
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -203,264 +203,107 @@ static void write_string_field(BinWriter& w, const std::string& utf8, size_t fie
   if (enc.size() < field_bytes) w.pad0(field_bytes - enc.size());
 }
 
-static cJSON* read_one_song(BinReader& br, uint32_t version) {
+struct SongScratch {
   std::string title, title_ascii, genre, artist, subtitle;
+  std::string bga_filename;
+  std::string afp_entry;
+};
 
-  if (version == 80) {
-    title = read_string_cp932(br.ptr(0x80), 0x80);
-    title_ascii = read_string_cp932(br.ptr(0x40), 0x40);
-    genre = read_string_cp932(br.ptr(0x80), 0x80);
-    artist = read_string_cp932(br.ptr(0x80), 0x80);
-  } else if (version >= 32) {
-    title = read_string_utf16(br.ptr(0x100), 0x100);
-    title_ascii = read_string_cp932(br.ptr(0x40), 0x40);
-    genre = read_string_utf16(br.ptr(0x80), 0x80);
-    artist = read_string_utf16(br.ptr(0x100), 0x100);
-    subtitle = read_string_utf16(br.ptr(0x100), 0x100);
-  } else {
-    title = read_string_cp932(br.ptr(0x40), 0x40);
-    title_ascii = read_string_cp932(br.ptr(0x40), 0x40);
-    genre = read_string_cp932(br.ptr(0x40), 0x40);
-    artist = read_string_cp932(br.ptr(0x40), 0x40);
-  }
+struct SongData {
+  uint32_t song_id = 0xffffffffu;
 
-  uint32_t texture_title = br.u32le();
-  uint32_t texture_artist = br.u32le();
-  uint32_t texture_genre = br.u32le();
-  uint32_t texture_load = br.u32le();
-  uint32_t texture_list = br.u32le();
+  std::string title;
+  std::string title_ascii;
+  std::string genre;
+  std::string artist;
+  std::string subtitle;
+
+  uint32_t texture_title = 0;
+  uint32_t texture_artist = 0;
+  uint32_t texture_genre = 0;
+  uint32_t texture_load = 0;
+  uint32_t texture_list = 0;
   uint32_t texture_subtitle = 0;
-  if (version >= 32 && version != 80) texture_subtitle = br.u32le();
 
-  uint32_t font_idx = br.u32le();
-  uint16_t game_version = br.u16le();
-
-  uint16_t other_folder = 0, bemani_folder = 0, beginner_rec_folder = 0, iidx_rec_folder = 0, bemani_rec_folder = 0, splittable_diff = 0,
-           unk_unused = 0;
-  if (version >= 32 && version != 80) {
-    other_folder = br.u16le();
-    bemani_folder = br.u16le();
-    beginner_rec_folder = br.u16le();
-    iidx_rec_folder = br.u16le();
-    bemani_rec_folder = br.u16le();
-    splittable_diff = br.u16le();
-    unk_unused = br.u16le();
-  } else {
-    other_folder = br.u16le();
-    bemani_folder = br.u16le();
-    splittable_diff = br.u16le();
-  }
+  uint32_t font_idx = 0;
+  int game_version = 0;
+  int other_folder = 0;
+  int bemani_folder = 0;
+  int beginner_rec_folder = 0;
+  int iidx_rec_folder = 0;
+  int bemani_rec_folder = 0;
+  int splittable_diff = 0;
+  int unk_unused = 0;
 
   int SPB_level = 0, SPN_level = 0, SPH_level = 0, SPA_level = 0, SPL_level = 0;
   int DPB_level = 0, DPN_level = 0, DPH_level = 0, DPA_level = 0, DPL_level = 0;
 
-  if (version >= 27) {
-    SPB_level = static_cast<int>(br.u8());
-    SPN_level = static_cast<int>(br.u8());
-    SPH_level = static_cast<int>(br.u8());
-    SPA_level = static_cast<int>(br.u8());
-    SPL_level = static_cast<int>(br.u8());
-    DPB_level = static_cast<int>(br.u8());
-    DPN_level = static_cast<int>(br.u8());
-    DPH_level = static_cast<int>(br.u8());
-    DPA_level = static_cast<int>(br.u8());
-    DPL_level = static_cast<int>(br.u8());
-  } else {
-    SPN_level = static_cast<int>(br.u8());
-    SPH_level = static_cast<int>(br.u8());
-    SPA_level = static_cast<int>(br.u8());
-    DPN_level = static_cast<int>(br.u8());
-    DPH_level = static_cast<int>(br.u8());
-    DPA_level = static_cast<int>(br.u8());
-    SPB_level = static_cast<int>(br.u8());
-    DPB_level = static_cast<int>(br.u8());
-    SPL_level = 0;
-    DPL_level = 0;
-  }
-
-  if (version == 80)
-    br.skip(0x2C6);
-  else if (version >= 27)
-    br.skip(0x286);
-  else
-    br.skip(0xA0);
-
-  uint32_t song_id = br.u32le();
-  uint32_t volume = br.u32le();
-
+  uint32_t volume = 0;
   int SPB_ident = 0, SPN_ident = 0, SPH_ident = 0, SPA_ident = 0, SPL_ident = 0;
   int DPB_ident = 0, DPN_ident = 0, DPH_ident = 0, DPA_ident = 0, DPL_ident = 0;
 
-  if (version >= 27) {
-    SPB_ident = static_cast<int>(br.u8());
-    SPN_ident = static_cast<int>(br.u8());
-    SPH_ident = static_cast<int>(br.u8());
-    SPA_ident = static_cast<int>(br.u8());
-    SPL_ident = static_cast<int>(br.u8());
-    DPB_ident = static_cast<int>(br.u8());
-    DPN_ident = static_cast<int>(br.u8());
-    DPH_ident = static_cast<int>(br.u8());
-    DPA_ident = static_cast<int>(br.u8());
-    DPL_ident = static_cast<int>(br.u8());
-  } else {
-    SPN_ident = static_cast<int>(br.u8());
-    SPH_ident = static_cast<int>(br.u8());
-    SPA_ident = static_cast<int>(br.u8());
-    DPN_ident = static_cast<int>(br.u8());
-    DPH_ident = static_cast<int>(br.u8());
-    DPA_ident = static_cast<int>(br.u8());
-    SPB_ident = static_cast<int>(br.u8());
-    DPB_ident = static_cast<int>(br.u8());
-    SPL_ident = 48;
-    DPL_ident = 48;
-  }
+  int bga_delay = 0;
+  std::string bga_filename;
 
-  int16_t bga_delay = br.i16le();
+  uint32_t afp_flag = 0;
+  // JSON contains 9 or 10 elements depending on version; store up to 10.
+  std::array<std::string, 10> afp_data{};
+  int afp_data_count = 0;
+};
 
-  if (version <= 26 || version == 80) br.skip(2);
-
-  std::string bga_filename = read_string_cp932(br.ptr(0x20), 0x20);
-
-  if (version == 80) br.skip(2);
-
-  uint32_t afp_flag = br.u32le();
-
-  int afp_n = (version >= 22) ? 10 : 9;
-  cJSON* afp_arr = cJSON_CreateArray();
-  for (int a = 0; a < afp_n; ++a) {
-    std::string s = read_string_cp932(br.ptr(0x20), 0x20);
-    cJSON_AddItemToArray(afp_arr, cJSON_CreateString(s.c_str()));
-  }
-
-  if (version >= 26) br.skip(4);
-
-  cJSON* o = cJSON_CreateObject();
-  cJSON_AddNumberToObject(o, "song_id", song_id);
-  cJSON_AddStringToObject(o, "title", title.c_str());
-  cJSON_AddStringToObject(o, "title_ascii", title_ascii.c_str());
-  cJSON_AddStringToObject(o, "genre", genre.c_str());
-  cJSON_AddStringToObject(o, "artist", artist.c_str());
-  cJSON_AddNumberToObject(o, "texture_title", texture_title);
-  cJSON_AddNumberToObject(o, "texture_artist", texture_artist);
-  cJSON_AddNumberToObject(o, "texture_genre", texture_genre);
-  cJSON_AddNumberToObject(o, "texture_load", texture_load);
-  cJSON_AddNumberToObject(o, "texture_list", texture_list);
-  cJSON_AddNumberToObject(o, "font_idx", font_idx);
-  cJSON_AddNumberToObject(o, "game_version", game_version);
-  cJSON_AddNumberToObject(o, "other_folder", other_folder);
-  cJSON_AddNumberToObject(o, "bemani_folder", bemani_folder);
-  cJSON_AddNumberToObject(o, "splittable_diff", splittable_diff);
-  cJSON_AddNumberToObject(o, "SPB_level", SPB_level);
-  cJSON_AddNumberToObject(o, "SPN_level", SPN_level);
-  cJSON_AddNumberToObject(o, "SPH_level", SPH_level);
-  cJSON_AddNumberToObject(o, "SPA_level", SPA_level);
-  cJSON_AddNumberToObject(o, "SPL_level", SPL_level);
-  cJSON_AddNumberToObject(o, "DPB_level", DPB_level);
-  cJSON_AddNumberToObject(o, "DPN_level", DPN_level);
-  cJSON_AddNumberToObject(o, "DPH_level", DPH_level);
-  cJSON_AddNumberToObject(o, "DPA_level", DPA_level);
-  cJSON_AddNumberToObject(o, "DPL_level", DPL_level);
-  cJSON_AddNumberToObject(o, "volume", volume);
-  cJSON_AddNumberToObject(o, "SPB_ident", SPB_ident);
-  cJSON_AddNumberToObject(o, "SPN_ident", SPN_ident);
-  cJSON_AddNumberToObject(o, "SPH_ident", SPH_ident);
-  cJSON_AddNumberToObject(o, "SPA_ident", SPA_ident);
-  cJSON_AddNumberToObject(o, "SPL_ident", SPL_ident);
-  cJSON_AddNumberToObject(o, "DPB_ident", DPB_ident);
-  cJSON_AddNumberToObject(o, "DPN_ident", DPN_ident);
-  cJSON_AddNumberToObject(o, "DPH_ident", DPH_ident);
-  cJSON_AddNumberToObject(o, "DPA_ident", DPA_ident);
-  cJSON_AddNumberToObject(o, "DPL_ident", DPL_ident);
-  cJSON_AddStringToObject(o, "bga_filename", bga_filename.c_str());
-  cJSON_AddNumberToObject(o, "bga_delay", bga_delay);
-  cJSON_AddNumberToObject(o, "afp_flag", afp_flag);
-  cJSON_AddItemToObject(o, "afp_data", afp_arr);
-
-  if (version >= 32 && version != 80) {
-    cJSON_AddStringToObject(o, "subtitle", subtitle.c_str());
-    cJSON_AddNumberToObject(o, "texture_subtitle", texture_subtitle);
-    cJSON_AddNumberToObject(o, "beginner_rec_folder", beginner_rec_folder);
-    cJSON_AddNumberToObject(o, "iidx_rec_folder", iidx_rec_folder);
-    cJSON_AddNumberToObject(o, "bemani_rec_folder", bemani_rec_folder);
-    cJSON_AddNumberToObject(o, "unk_unused", unk_unused);
-  }
-
-  return o;
-}
-
-static int get_json_int(cJSON* o, const char* key, int def = 0) {
-  cJSON* it = cJSON_GetObjectItemCaseSensitive(o, key);
-  if (!it || !cJSON_IsNumber(it)) return def;
-  return static_cast<int>(it->valuedouble);
-}
-
-static uint32_t get_json_u32(cJSON* o, const char* key, uint32_t def = 0) {
-  cJSON* it = cJSON_GetObjectItemCaseSensitive(o, key);
-  if (!it || !cJSON_IsNumber(it)) return def;
-  return static_cast<uint32_t>(it->valuedouble);
-}
-
-static std::string get_json_str(cJSON* o, const char* key, const std::string& def = {}) {
-  cJSON* it = cJSON_GetObjectItemCaseSensitive(o, key);
-  if (!it || !cJSON_IsString(it)) return def;
-  return it->valuestring ? it->valuestring : def;
-}
-
-static void write_one_song(BinWriter& bw, uint32_t version, cJSON* song_data) {
+static void write_one_song_typed(BinWriter& bw, uint32_t version, const SongData& s) {
   if (version == 80) {
-    write_string_field(bw, get_json_str(song_data, "title"), 0x80, false);
-    write_string_field(bw, get_json_str(song_data, "title_ascii"), 0x40, false);
-    write_string_field(bw, get_json_str(song_data, "genre"), 0x80, false);
-    write_string_field(bw, get_json_str(song_data, "artist"), 0x80, false);
+    write_string_field(bw, s.title, 0x80, false);
+    write_string_field(bw, s.title_ascii, 0x40, false);
+    write_string_field(bw, s.genre, 0x80, false);
+    write_string_field(bw, s.artist, 0x80, false);
   } else if (version >= 32) {
-    write_string_field(bw, get_json_str(song_data, "title"), 0x100, true);
-    write_string_field(bw, get_json_str(song_data, "title_ascii"), 0x40, false);
-    write_string_field(bw, get_json_str(song_data, "genre"), 0x80, true);
-    write_string_field(bw, get_json_str(song_data, "artist"), 0x100, true);
-    write_string_field(bw, get_json_str(song_data, "subtitle", ""), 0x100, true);
+    write_string_field(bw, s.title, 0x100, true);
+    write_string_field(bw, s.title_ascii, 0x40, false);
+    write_string_field(bw, s.genre, 0x80, true);
+    write_string_field(bw, s.artist, 0x100, true);
+    write_string_field(bw, s.subtitle, 0x100, true);
   } else {
-    write_string_field(bw, get_json_str(song_data, "title"), 0x40, false);
-    write_string_field(bw, get_json_str(song_data, "title_ascii"), 0x40, false);
-    write_string_field(bw, get_json_str(song_data, "genre"), 0x40, false);
-    write_string_field(bw, get_json_str(song_data, "artist"), 0x40, false);
+    write_string_field(bw, s.title, 0x40, false);
+    write_string_field(bw, s.title_ascii, 0x40, false);
+    write_string_field(bw, s.genre, 0x40, false);
+    write_string_field(bw, s.artist, 0x40, false);
   }
 
-  bw.u32le(get_json_u32(song_data, "texture_title"));
-  bw.u32le(get_json_u32(song_data, "texture_artist"));
-  bw.u32le(get_json_u32(song_data, "texture_genre"));
-  bw.u32le(get_json_u32(song_data, "texture_load"));
-  bw.u32le(get_json_u32(song_data, "texture_list"));
-  if (version >= 32 && version != 80) bw.u32le(get_json_u32(song_data, "texture_subtitle", 0));
+  bw.u32le(s.texture_title);
+  bw.u32le(s.texture_artist);
+  bw.u32le(s.texture_genre);
+  bw.u32le(s.texture_load);
+  bw.u32le(s.texture_list);
+  if (version >= 32 && version != 80) bw.u32le(s.texture_subtitle);
 
-  bw.u32le(get_json_u32(song_data, "font_idx"));
-  bw.u16le(static_cast<uint16_t>(get_json_int(song_data, "game_version")));
+  bw.u32le(s.font_idx);
+  bw.u16le(static_cast<uint16_t>(s.game_version));
 
   if (version >= 32 && version != 80) {
-    bw.u16le(static_cast<uint16_t>(get_json_int(song_data, "other_folder")));
-    bw.u16le(static_cast<uint16_t>(get_json_int(song_data, "bemani_folder")));
-    bw.u16le(static_cast<uint16_t>(get_json_int(song_data, "beginner_rec_folder", 0)));
-    bw.u16le(static_cast<uint16_t>(get_json_int(song_data, "iidx_rec_folder", 0)));
-    bw.u16le(static_cast<uint16_t>(get_json_int(song_data, "bemani_rec_folder", 0)));
-    bw.u16le(static_cast<uint16_t>(get_json_int(song_data, "splittable_diff")));
-    bw.u16le(static_cast<uint16_t>(get_json_int(song_data, "unk_unused", 0)));
+    bw.u16le(static_cast<uint16_t>(s.other_folder));
+    bw.u16le(static_cast<uint16_t>(s.bemani_folder));
+    bw.u16le(static_cast<uint16_t>(s.beginner_rec_folder));
+    bw.u16le(static_cast<uint16_t>(s.iidx_rec_folder));
+    bw.u16le(static_cast<uint16_t>(s.bemani_rec_folder));
+    bw.u16le(static_cast<uint16_t>(s.splittable_diff));
+    bw.u16le(static_cast<uint16_t>(s.unk_unused));
   } else {
-    bw.u16le(static_cast<uint16_t>(get_json_int(song_data, "other_folder")));
-    bw.u16le(static_cast<uint16_t>(get_json_int(song_data, "bemani_folder")));
-    bw.u16le(static_cast<uint16_t>(get_json_int(song_data, "splittable_diff")));
+    bw.u16le(static_cast<uint16_t>(s.other_folder));
+    bw.u16le(static_cast<uint16_t>(s.bemani_folder));
+    bw.u16le(static_cast<uint16_t>(s.splittable_diff));
   }
 
   if (version >= 27) {
-    uint8_t lv[10] = {static_cast<uint8_t>(get_json_int(song_data, "SPB_level")), static_cast<uint8_t>(get_json_int(song_data, "SPN_level")),
-                      static_cast<uint8_t>(get_json_int(song_data, "SPH_level")), static_cast<uint8_t>(get_json_int(song_data, "SPA_level")),
-                      static_cast<uint8_t>(get_json_int(song_data, "SPL_level")), static_cast<uint8_t>(get_json_int(song_data, "DPB_level")),
-                      static_cast<uint8_t>(get_json_int(song_data, "DPN_level")), static_cast<uint8_t>(get_json_int(song_data, "DPH_level")),
-                      static_cast<uint8_t>(get_json_int(song_data, "DPA_level")), static_cast<uint8_t>(get_json_int(song_data, "DPL_level"))};
+    uint8_t lv[10] = {static_cast<uint8_t>(s.SPB_level), static_cast<uint8_t>(s.SPN_level), static_cast<uint8_t>(s.SPH_level),
+                      static_cast<uint8_t>(s.SPA_level), static_cast<uint8_t>(s.SPL_level), static_cast<uint8_t>(s.DPB_level),
+                      static_cast<uint8_t>(s.DPN_level), static_cast<uint8_t>(s.DPH_level), static_cast<uint8_t>(s.DPA_level),
+                      static_cast<uint8_t>(s.DPL_level)};
     bw.raw(lv, 10);
   } else {
-    uint8_t lv[8] = {static_cast<uint8_t>(get_json_int(song_data, "SPN_level")), static_cast<uint8_t>(get_json_int(song_data, "SPH_level")),
-                     static_cast<uint8_t>(get_json_int(song_data, "SPA_level")), static_cast<uint8_t>(get_json_int(song_data, "DPN_level")),
-                     static_cast<uint8_t>(get_json_int(song_data, "DPH_level")), static_cast<uint8_t>(get_json_int(song_data, "DPA_level")),
-                     static_cast<uint8_t>(get_json_int(song_data, "SPB_level")), static_cast<uint8_t>(get_json_int(song_data, "DPB_level"))};
+    uint8_t lv[8] = {static_cast<uint8_t>(s.SPN_level), static_cast<uint8_t>(s.SPH_level), static_cast<uint8_t>(s.SPA_level),
+                     static_cast<uint8_t>(s.DPN_level), static_cast<uint8_t>(s.DPH_level), static_cast<uint8_t>(s.DPA_level),
+                     static_cast<uint8_t>(s.SPB_level), static_cast<uint8_t>(s.DPB_level)};
     bw.raw(lv, 8);
   }
 
@@ -473,56 +316,48 @@ static void write_one_song(BinWriter& bw, uint32_t version, cJSON* song_data) {
   else
     bw.write_unk(kUnk26, kUnk26_len);
 
-  bw.u32le(get_json_u32(song_data, "song_id"));
-  bw.u32le(get_json_u32(song_data, "volume"));
+  bw.u32le(s.song_id);
+  bw.u32le(s.volume);
 
   if (version >= 27) {
-    uint8_t id[10] = {static_cast<uint8_t>(get_json_int(song_data, "SPB_ident")), static_cast<uint8_t>(get_json_int(song_data, "SPN_ident")),
-                      static_cast<uint8_t>(get_json_int(song_data, "SPH_ident")), static_cast<uint8_t>(get_json_int(song_data, "SPA_ident")),
-                      static_cast<uint8_t>(get_json_int(song_data, "SPL_ident")), static_cast<uint8_t>(get_json_int(song_data, "DPB_ident")),
-                      static_cast<uint8_t>(get_json_int(song_data, "DPN_ident")), static_cast<uint8_t>(get_json_int(song_data, "DPH_ident")),
-                      static_cast<uint8_t>(get_json_int(song_data, "DPA_ident")), static_cast<uint8_t>(get_json_int(song_data, "DPL_ident"))};
+    uint8_t id[10] = {static_cast<uint8_t>(s.SPB_ident), static_cast<uint8_t>(s.SPN_ident), static_cast<uint8_t>(s.SPH_ident),
+                      static_cast<uint8_t>(s.SPA_ident), static_cast<uint8_t>(s.SPL_ident), static_cast<uint8_t>(s.DPB_ident),
+                      static_cast<uint8_t>(s.DPN_ident), static_cast<uint8_t>(s.DPH_ident), static_cast<uint8_t>(s.DPA_ident),
+                      static_cast<uint8_t>(s.DPL_ident)};
     bw.raw(id, 10);
   } else {
-    uint8_t id[8] = {static_cast<uint8_t>(get_json_int(song_data, "SPN_ident")), static_cast<uint8_t>(get_json_int(song_data, "SPH_ident")),
-                     static_cast<uint8_t>(get_json_int(song_data, "SPA_ident")), static_cast<uint8_t>(get_json_int(song_data, "DPN_ident")),
-                     static_cast<uint8_t>(get_json_int(song_data, "DPH_ident")), static_cast<uint8_t>(get_json_int(song_data, "DPA_ident")),
-                     static_cast<uint8_t>(get_json_int(song_data, "SPB_ident")), static_cast<uint8_t>(get_json_int(song_data, "DPB_ident"))};
+    uint8_t id[8] = {static_cast<uint8_t>(s.SPN_ident), static_cast<uint8_t>(s.SPH_ident), static_cast<uint8_t>(s.SPA_ident),
+                     static_cast<uint8_t>(s.DPN_ident), static_cast<uint8_t>(s.DPH_ident), static_cast<uint8_t>(s.DPA_ident),
+                     static_cast<uint8_t>(s.SPB_ident), static_cast<uint8_t>(s.DPB_ident)};
     bw.raw(id, 8);
   }
 
-  bw.i16le(static_cast<int16_t>(get_json_int(song_data, "bga_delay")));
+  bw.i16le(static_cast<int16_t>(s.bga_delay));
 
   if (version <= 26 || version == 80) bw.pad0(2);
 
-  write_string_field(bw, get_json_str(song_data, "bga_filename"), 0x20, false);
+  write_string_field(bw, s.bga_filename, 0x20, false);
 
   if (version == 80) bw.pad0(2);
 
-  bw.u32le(get_json_u32(song_data, "afp_flag"));
+  bw.u32le(s.afp_flag);
 
-  int afp_count = (version >= 22) ? 10 : 9;
-  cJSON* afp = cJSON_GetObjectItemCaseSensitive(song_data, "afp_data");
+  const int afp_count = (version >= 22) ? 10 : 9;
   for (int idx = 0; idx < afp_count; ++idx) {
-    std::string s;
-    if (afp && cJSON_IsArray(afp)) {
-      cJSON* itm = cJSON_GetArrayItem(afp, idx);
-      if (itm && cJSON_IsString(itm) && itm->valuestring) s = itm->valuestring;
-    }
-    write_string_field(bw, s, 0x20, false);
+    const std::string& x = (idx < s.afp_data_count) ? s.afp_data[static_cast<size_t>(idx)] : std::string{};
+    write_string_field(bw, x, 0x20, false);
   }
 
   if (version >= 26) bw.pad0(4);
 }
 
-static void writer_impl(uint32_t version, BinWriter& bw, cJSON* data_array) {
-  int song_count = cJSON_GetArraySize(data_array);
+
+static void writer_impl_typed(uint32_t version, BinWriter& bw, const std::vector<SongData>& songs) {
+  const int song_count = static_cast<int>(songs.size());
   std::unordered_map<uint32_t, int> exist_ids;
+  exist_ids.reserve(songs.size());
   for (int i = 0; i < song_count; ++i) {
-    cJSON* row = cJSON_GetArrayItem(data_array, i);
-    if (!row) continue;
-    uint32_t sid = get_json_u32(row, "song_id", 0xffffffffu);
-    exist_ids[sid] = i;
+    exist_ids[songs[static_cast<size_t>(i)].song_id] = i;
   }
 
   uint32_t cur_style_entries = version * 1000u;
@@ -570,18 +405,34 @@ static void writer_impl(uint32_t version, BinWriter& bw, cJSON* data_array) {
 
   for (uint32_t k : sorted_keys) {
     int idx = exist_ids[k];
-    cJSON* song_data = cJSON_GetArrayItem(data_array, idx);
-    if (song_data) write_one_song(bw, version, song_data);
+    if (idx < 0 || idx >= song_count) continue;
+    write_one_song_typed(bw, version, songs[static_cast<size_t>(idx)]);
   }
 }
 
-// Pretty-print cJSON to match Python 3 json.dump(..., indent=4, ensure_ascii=False).
+// Pretty-print JSON to match Python 3 json.dump(..., indent=4, ensure_ascii=False).
 constexpr int kJsonIndentCols = 4;
 
 static void append_indent_units(std::string& out, int indent_units) {
   if (indent_units <= 0) return;
   out.append(static_cast<size_t>(indent_units) * static_cast<size_t>(kJsonIndentCols), ' ');
 }
+
+static void append_json_int(std::string& out, long long v) {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%lld", v);
+  out.append(buf);
+}
+
+static void append_json_u32(std::string& out, uint32_t v) {
+  char buf[16];
+  std::snprintf(buf, sizeof(buf), "%u", static_cast<unsigned>(v));
+  out.append(buf);
+}
+
+static void append_json_i16(std::string& out, int16_t v) { append_json_int(out, static_cast<long long>(v)); }
+static void append_json_i32(std::string& out, int32_t v) { append_json_int(out, static_cast<long long>(v)); }
+static void append_json_u16(std::string& out, uint16_t v) { append_json_int(out, static_cast<long long>(v)); }
 
 static void append_escaped_json_string(std::string& out, const char* input) {
   out.push_back('"');
@@ -592,31 +443,31 @@ static void append_escaped_json_string(std::string& out, const char* input) {
   for (const unsigned char* p = reinterpret_cast<const unsigned char*>(input); *p; ++p) {
     switch (*p) {
       case '"':
-        out += "\\\"";
+        out.append("\\\"");
         break;
       case '\\':
-        out += "\\\\";
+        out.append("\\\\");
         break;
       case '\b':
-        out += "\\b";
+        out.append("\\b");
         break;
       case '\f':
-        out += "\\f";
+        out.append("\\f");
         break;
       case '\n':
-        out += "\\n";
+        out.append("\\n");
         break;
       case '\r':
-        out += "\\r";
+        out.append("\\r");
         break;
       case '\t':
-        out += "\\t";
+        out.append("\\t");
         break;
       default:
         if (*p < 32) {
           char buf[7];
           std::snprintf(buf, sizeof(buf), "\\u%04x", *p);
-          out += buf;
+          out.append(buf);
         } else {
           out.push_back(static_cast<char>(*p));
         }
@@ -626,179 +477,814 @@ static void append_escaped_json_string(std::string& out, const char* input) {
   out.push_back('"');
 }
 
-static void append_json_number_python(std::string& out, const cJSON* item) {
-  double d = item->valuedouble;
-  if (!std::isfinite(d)) {
-    out += "null";
-    return;
-  }
-  constexpr double kMaxInt53 = 9007199254740992.0;
-  if (d >= -kMaxInt53 && d <= kMaxInt53 && d == std::trunc(d)) {
-    long long ll = static_cast<long long>(d);
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%lld", ll);
-    out += buf;
-    return;
-  }
-  char buf[64];
-  int n = std::snprintf(buf, sizeof(buf), "%.15g", d);
-  if (n > 0 && n < (int)sizeof(buf)) {
-    char* endp = nullptr;
-    double test = std::strtod(buf, &endp);
-    if (endp != buf && std::fabs(test - d) <= 1e-9 * (std::fabs(d) > 0 ? std::fabs(d) : 1.0)) {
-      out += buf;
-      return;
-    }
-  }
-  std::snprintf(buf, sizeof(buf), "%.17g", d);
-  out += buf;
-}
-
-static void append_json_value_after_colon(std::string& out, const cJSON* val, int key_line_indent_units);
-
-static void append_json_array_element(std::string& out, const cJSON* elem, int array_key_line_units) {
-  if (cJSON_IsNumber(elem)) {
-    append_json_number_python(out, elem);
-    return;
-  }
-  if (cJSON_IsString(elem)) {
-    append_escaped_json_string(out, elem->valuestring);
-    return;
-  }
-  if (cJSON_IsNull(elem)) {
-    out += "null";
-    return;
-  }
-  if (cJSON_IsArray(elem)) {
-    if (!elem->child) {
-      out += "[]";
-      return;
-    }
-    out += "[\n";
-    const cJSON* x = elem->child;
-    while (x) {
-      append_indent_units(out, array_key_line_units + 2);
-      append_json_array_element(out, x, array_key_line_units + 1);
-      if (x->next)
-        out += ",\n";
-      else
-        out += '\n';
-      x = x->next;
-    }
-    append_indent_units(out, array_key_line_units + 1);
-    out += ']';
-    return;
-  }
-  if (cJSON_IsObject(elem)) {
-    if (!elem->child) {
-      out += "{}";
-      return;
-    }
-    out += "{\n";
-    const cJSON* c = elem->child;
-    while (c) {
-      append_indent_units(out, array_key_line_units + 2);
-      append_escaped_json_string(out, c->string);
-      out += ": ";
-      append_json_value_after_colon(out, c, array_key_line_units + 2);
-      if (c->next)
-        out += ",\n";
-      else
-        out += '\n';
-      c = c->next;
-    }
-    append_indent_units(out, array_key_line_units + 1);
-    out += '}';
-    return;
-  }
-}
-
-static void append_json_value_after_colon(std::string& out, const cJSON* val, int key_line_indent_units) {
-  if (cJSON_IsNumber(val)) {
-    append_json_number_python(out, val);
-    return;
-  }
-  if (cJSON_IsString(val)) {
-    append_escaped_json_string(out, val->valuestring);
-    return;
-  }
-  if (cJSON_IsNull(val)) {
-    out += "null";
-    return;
-  }
-  if (cJSON_IsArray(val)) {
-    if (!val->child) {
-      out += "[]";
-      return;
-    }
-    out += "[\n";
-    const cJSON* e = val->child;
-    while (e) {
-      append_indent_units(out, key_line_indent_units + 1);
-      append_json_array_element(out, e, key_line_indent_units);
-      if (e->next)
-        out += ",\n";
-      else
-        out += '\n';
-      e = e->next;
-    }
-    append_indent_units(out, key_line_indent_units);
-    out += ']';
-    return;
-  }
-  if (cJSON_IsObject(val)) {
-    if (!val->child) {
-      out += "{}";
-      return;
-    }
-    out += "{\n";
-    const cJSON* c = val->child;
-    while (c) {
-      append_indent_units(out, key_line_indent_units + 1);
-      append_escaped_json_string(out, c->string);
-      out += ": ";
-      append_json_value_after_colon(out, c, key_line_indent_units + 1);
-      if (c->next)
-        out += ",\n";
-      else
-        out += '\n';
-      c = c->next;
-    }
-    append_indent_units(out, key_line_indent_units);
-    out += '}';
-    return;
-  }
-}
-
-static bool append_python_style_json_utf8(cJSON* root, std::string& out) {
-  out.clear();
-  if (!root || !cJSON_IsObject(root)) return false;
-  if (!root->child) {
-    out += "{}";
-    return true;
-  }
-  out += "{\n";
-  const cJSON* c = root->child;
-  while (c) {
-    append_indent_units(out, 1);
-    append_escaped_json_string(out, c->string);
-    out += ": ";
-    append_json_value_after_colon(out, c, 1);
-    if (c->next)
+static void append_afp_data_from_bin_python(std::string& out, BinReader& br, uint32_t version, SongScratch& scratch, int key_line_indent_units) {
+  const int afp_n = (version >= 22) ? 10 : 9;
+  out += "[\n";
+  for (int i = 0; i < afp_n; ++i) {
+    scratch.afp_entry = read_string_cp932(br.ptr(0x20), 0x20);
+    append_indent_units(out, key_line_indent_units + 1);
+    append_escaped_json_string(out, scratch.afp_entry.c_str());
+    if (i + 1 < afp_n)
       out += ",\n";
     else
       out += '\n';
-    c = c->next;
   }
+  append_indent_units(out, key_line_indent_units);
+  out += ']';
+}
+
+static void append_one_song_from_bin_python(std::string& out, BinReader& br, uint32_t version, SongScratch& scratch, int array_key_line_units) {
+  // Formatting matches the plugin's Python-style pretty JSON (indent=4, ensure_ascii=False).
+  scratch.subtitle.clear();
+
+  if (version == 80) {
+    scratch.title = read_string_cp932(br.ptr(0x80), 0x80);
+    scratch.title_ascii = read_string_cp932(br.ptr(0x40), 0x40);
+    scratch.genre = read_string_cp932(br.ptr(0x80), 0x80);
+    scratch.artist = read_string_cp932(br.ptr(0x80), 0x80);
+  } else if (version >= 32) {
+    scratch.title = read_string_utf16(br.ptr(0x100), 0x100);
+    scratch.title_ascii = read_string_cp932(br.ptr(0x40), 0x40);
+    scratch.genre = read_string_utf16(br.ptr(0x80), 0x80);
+    scratch.artist = read_string_utf16(br.ptr(0x100), 0x100);
+    scratch.subtitle = read_string_utf16(br.ptr(0x100), 0x100);
+  } else {
+    scratch.title = read_string_cp932(br.ptr(0x40), 0x40);
+    scratch.title_ascii = read_string_cp932(br.ptr(0x40), 0x40);
+    scratch.genre = read_string_cp932(br.ptr(0x40), 0x40);
+    scratch.artist = read_string_cp932(br.ptr(0x40), 0x40);
+  }
+
+  const uint32_t texture_title = br.u32le();
+  const uint32_t texture_artist = br.u32le();
+  const uint32_t texture_genre = br.u32le();
+  const uint32_t texture_load = br.u32le();
+  const uint32_t texture_list = br.u32le();
+  uint32_t texture_subtitle = 0;
+  if (version >= 32 && version != 80) texture_subtitle = br.u32le();
+
+  const uint32_t font_idx = br.u32le();
+  const uint16_t game_version = br.u16le();
+
+  uint16_t other_folder = 0, bemani_folder = 0, beginner_rec_folder = 0, iidx_rec_folder = 0, bemani_rec_folder = 0, splittable_diff = 0, unk_unused = 0;
+  if (version >= 32 && version != 80) {
+    other_folder = br.u16le();
+    bemani_folder = br.u16le();
+    beginner_rec_folder = br.u16le();
+    iidx_rec_folder = br.u16le();
+    bemani_rec_folder = br.u16le();
+    splittable_diff = br.u16le();
+    unk_unused = br.u16le();
+  } else {
+    other_folder = br.u16le();
+    bemani_folder = br.u16le();
+    splittable_diff = br.u16le();
+  }
+
+  int SPB_level = 0, SPN_level = 0, SPH_level = 0, SPA_level = 0, SPL_level = 0;
+  int DPB_level = 0, DPN_level = 0, DPH_level = 0, DPA_level = 0, DPL_level = 0;
+  if (version >= 27) {
+    SPB_level = static_cast<int>(br.u8());
+    SPN_level = static_cast<int>(br.u8());
+    SPH_level = static_cast<int>(br.u8());
+    SPA_level = static_cast<int>(br.u8());
+    SPL_level = static_cast<int>(br.u8());
+    DPB_level = static_cast<int>(br.u8());
+    DPN_level = static_cast<int>(br.u8());
+    DPH_level = static_cast<int>(br.u8());
+    DPA_level = static_cast<int>(br.u8());
+    DPL_level = static_cast<int>(br.u8());
+  } else {
+    SPN_level = static_cast<int>(br.u8());
+    SPH_level = static_cast<int>(br.u8());
+    SPA_level = static_cast<int>(br.u8());
+    DPN_level = static_cast<int>(br.u8());
+    DPH_level = static_cast<int>(br.u8());
+    DPA_level = static_cast<int>(br.u8());
+    SPB_level = static_cast<int>(br.u8());
+    DPB_level = static_cast<int>(br.u8());
+    SPL_level = 0;
+    DPL_level = 0;
+  }
+
+  if (version == 80)
+    br.skip(0x2C6);
+  else if (version >= 27)
+    br.skip(0x286);
+  else
+    br.skip(0xA0);
+
+  const uint32_t song_id = br.u32le();
+  const uint32_t volume = br.u32le();
+
+  int SPB_ident = 0, SPN_ident = 0, SPH_ident = 0, SPA_ident = 0, SPL_ident = 0;
+  int DPB_ident = 0, DPN_ident = 0, DPH_ident = 0, DPA_ident = 0, DPL_ident = 0;
+  if (version >= 27) {
+    SPB_ident = static_cast<int>(br.u8());
+    SPN_ident = static_cast<int>(br.u8());
+    SPH_ident = static_cast<int>(br.u8());
+    SPA_ident = static_cast<int>(br.u8());
+    SPL_ident = static_cast<int>(br.u8());
+    DPB_ident = static_cast<int>(br.u8());
+    DPN_ident = static_cast<int>(br.u8());
+    DPH_ident = static_cast<int>(br.u8());
+    DPA_ident = static_cast<int>(br.u8());
+    DPL_ident = static_cast<int>(br.u8());
+  } else {
+    SPN_ident = static_cast<int>(br.u8());
+    SPH_ident = static_cast<int>(br.u8());
+    SPA_ident = static_cast<int>(br.u8());
+    DPN_ident = static_cast<int>(br.u8());
+    DPH_ident = static_cast<int>(br.u8());
+    DPA_ident = static_cast<int>(br.u8());
+    SPB_ident = static_cast<int>(br.u8());
+    DPB_ident = static_cast<int>(br.u8());
+    SPL_ident = 48;
+    DPL_ident = 48;
+  }
+
+  const int16_t bga_delay = br.i16le();
+  if (version <= 26 || version == 80) br.skip(2);
+
+  scratch.bga_filename = read_string_cp932(br.ptr(0x20), 0x20);
+  if (version == 80) br.skip(2);
+
+  const uint32_t afp_flag = br.u32le();
+
+  out += "{\n";
+  auto key = [&](const char* k) {
+    append_indent_units(out, array_key_line_units + 2);
+    append_escaped_json_string(out, k);
+    out += ": ";
+  };
+  auto comma_nl = [&](bool more) {
+    if (more)
+      out += ",\n";
+    else
+      out += '\n';
+  };
+
+  key("song_id");
+  append_json_u32(out, song_id);
+  comma_nl(true);
+  key("title");
+  append_escaped_json_string(out, scratch.title.c_str());
+  comma_nl(true);
+  key("title_ascii");
+  append_escaped_json_string(out, scratch.title_ascii.c_str());
+  comma_nl(true);
+  key("genre");
+  append_escaped_json_string(out, scratch.genre.c_str());
+  comma_nl(true);
+  key("artist");
+  append_escaped_json_string(out, scratch.artist.c_str());
+  comma_nl(true);
+  key("texture_title");
+  append_json_u32(out, texture_title);
+  comma_nl(true);
+  key("texture_artist");
+  append_json_u32(out, texture_artist);
+  comma_nl(true);
+  key("texture_genre");
+  append_json_u32(out, texture_genre);
+  comma_nl(true);
+  key("texture_load");
+  append_json_u32(out, texture_load);
+  comma_nl(true);
+  key("texture_list");
+  append_json_u32(out, texture_list);
+  comma_nl(true);
+  key("font_idx");
+  append_json_u32(out, font_idx);
+  comma_nl(true);
+  key("game_version");
+  append_json_u16(out, game_version);
+  comma_nl(true);
+  key("other_folder");
+  append_json_u16(out, other_folder);
+  comma_nl(true);
+  key("bemani_folder");
+  append_json_u16(out, bemani_folder);
+  comma_nl(true);
+  key("splittable_diff");
+  append_json_u16(out, splittable_diff);
+  comma_nl(true);
+  key("SPB_level");
+  append_json_i32(out, SPB_level);
+  comma_nl(true);
+  key("SPN_level");
+  append_json_i32(out, SPN_level);
+  comma_nl(true);
+  key("SPH_level");
+  append_json_i32(out, SPH_level);
+  comma_nl(true);
+  key("SPA_level");
+  append_json_i32(out, SPA_level);
+  comma_nl(true);
+  key("SPL_level");
+  append_json_i32(out, SPL_level);
+  comma_nl(true);
+  key("DPB_level");
+  append_json_i32(out, DPB_level);
+  comma_nl(true);
+  key("DPN_level");
+  append_json_i32(out, DPN_level);
+  comma_nl(true);
+  key("DPH_level");
+  append_json_i32(out, DPH_level);
+  comma_nl(true);
+  key("DPA_level");
+  append_json_i32(out, DPA_level);
+  comma_nl(true);
+  key("DPL_level");
+  append_json_i32(out, DPL_level);
+  comma_nl(true);
+  key("volume");
+  append_json_u32(out, volume);
+  comma_nl(true);
+  key("SPB_ident");
+  append_json_i32(out, SPB_ident);
+  comma_nl(true);
+  key("SPN_ident");
+  append_json_i32(out, SPN_ident);
+  comma_nl(true);
+  key("SPH_ident");
+  append_json_i32(out, SPH_ident);
+  comma_nl(true);
+  key("SPA_ident");
+  append_json_i32(out, SPA_ident);
+  comma_nl(true);
+  key("SPL_ident");
+  append_json_i32(out, SPL_ident);
+  comma_nl(true);
+  key("DPB_ident");
+  append_json_i32(out, DPB_ident);
+  comma_nl(true);
+  key("DPN_ident");
+  append_json_i32(out, DPN_ident);
+  comma_nl(true);
+  key("DPH_ident");
+  append_json_i32(out, DPH_ident);
+  comma_nl(true);
+  key("DPA_ident");
+  append_json_i32(out, DPA_ident);
+  comma_nl(true);
+  key("DPL_ident");
+  append_json_i32(out, DPL_ident);
+  comma_nl(true);
+  key("bga_filename");
+  append_escaped_json_string(out, scratch.bga_filename.c_str());
+  comma_nl(true);
+  key("bga_delay");
+  append_json_i16(out, bga_delay);
+  comma_nl(true);
+  key("afp_flag");
+  append_json_u32(out, afp_flag);
+  comma_nl(true);
+  key("afp_data");
+  append_afp_data_from_bin_python(out, br, version, scratch, array_key_line_units + 2);
+
+  if (version >= 32 && version != 80) {
+    comma_nl(true);
+    key("subtitle");
+    append_escaped_json_string(out, scratch.subtitle.c_str());
+    comma_nl(true);
+    key("texture_subtitle");
+    append_json_u32(out, texture_subtitle);
+    comma_nl(true);
+    key("beginner_rec_folder");
+    append_json_u16(out, beginner_rec_folder);
+    comma_nl(true);
+    key("iidx_rec_folder");
+    append_json_u16(out, iidx_rec_folder);
+    comma_nl(true);
+    key("bemani_rec_folder");
+    append_json_u16(out, bemani_rec_folder);
+    comma_nl(true);
+    key("unk_unused");
+    append_json_u16(out, unk_unused);
+    comma_nl(false);
+  } else {
+    comma_nl(false);
+  }
+
+  append_indent_units(out, array_key_line_units + 1);
   out += '}';
+
+  if (version >= 26) br.skip(4);
+}
+
+// -------- Streaming JSON parser for save path (schema-tailored) --------
+
+namespace {
+
+static inline bool json_is_ws(unsigned char c) { return c == ' ' || c == '\n' || c == '\r' || c == '\t'; }
+
+struct JsonReader {
+  const char* p = nullptr;
+  const char* end = nullptr;
+
+  explicit JsonReader(const std::string& s) : p(s.data()), end(s.data() + s.size()) {}
+
+  bool eof() const { return p >= end; }
+
+  void skip_ws() {
+    while (!eof() && json_is_ws(static_cast<unsigned char>(*p))) ++p;
+  }
+
+  bool consume(char c) {
+    skip_ws();
+    if (!eof() && *p == c) {
+      ++p;
+      return true;
+    }
+    return false;
+  }
+
+  bool peek(char c) {
+    skip_ws();
+    return (!eof() && *p == c);
+  }
+
+  bool expect(char c, std::wstring& err) {
+    if (consume(c)) return true;
+    err = L"Invalid JSON (expected MusicDataPlugin schema): missing expected token.";
+    return false;
+  }
+
+  static void append_utf8_codepoint(std::string& out, uint32_t cp) {
+    if (cp <= 0x7Fu) {
+      out.push_back(static_cast<char>(cp));
+    } else if (cp <= 0x7FFu) {
+      out.push_back(static_cast<char>(0xC0u | (cp >> 6)));
+      out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
+    } else if (cp <= 0xFFFFu) {
+      out.push_back(static_cast<char>(0xE0u | (cp >> 12)));
+      out.push_back(static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu)));
+      out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
+    } else {
+      out.push_back(static_cast<char>(0xF0u | (cp >> 18)));
+      out.push_back(static_cast<char>(0x80u | ((cp >> 12) & 0x3Fu)));
+      out.push_back(static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu)));
+      out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
+    }
+  }
+
+  bool read_hex4(uint32_t& out, std::wstring& err) {
+    out = 0;
+    for (int i = 0; i < 4; ++i) {
+      if (eof()) {
+        err = L"Invalid JSON: truncated \\u escape.";
+        return false;
+      }
+      char c = *p++;
+      out <<= 4;
+      if (c >= '0' && c <= '9')
+        out |= static_cast<uint32_t>(c - '0');
+      else if (c >= 'a' && c <= 'f')
+        out |= static_cast<uint32_t>(10 + (c - 'a'));
+      else if (c >= 'A' && c <= 'F')
+        out |= static_cast<uint32_t>(10 + (c - 'A'));
+      else {
+        err = L"Invalid JSON: bad hex in \\u escape.";
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool read_string(std::string& out, std::wstring& err) {
+    skip_ws();
+    if (eof() || *p != '"') {
+      err = L"Invalid JSON (expected MusicDataPlugin schema): expected string.";
+      return false;
+    }
+    ++p;
+    out.clear();
+    while (!eof()) {
+      unsigned char c = static_cast<unsigned char>(*p++);
+      if (c == '"') return true;
+      if (c == '\\') {
+        if (eof()) {
+          err = L"Invalid JSON: truncated escape.";
+          return false;
+        }
+        char e = *p++;
+        switch (e) {
+          case '"':
+          case '\\':
+          case '/':
+            out.push_back(e);
+            break;
+          case 'b':
+            out.push_back('\b');
+            break;
+          case 'f':
+            out.push_back('\f');
+            break;
+          case 'n':
+            out.push_back('\n');
+            break;
+          case 'r':
+            out.push_back('\r');
+            break;
+          case 't':
+            out.push_back('\t');
+            break;
+          case 'u': {
+            uint32_t cp = 0;
+            if (!read_hex4(cp, err)) return false;
+            // Surrogates not expected in plugin output; treat as code point.
+            append_utf8_codepoint(out, cp);
+            break;
+          }
+          default:
+            err = L"Invalid JSON: unknown escape.";
+            return false;
+        }
+      } else {
+        out.push_back(static_cast<char>(c));
+      }
+    }
+    err = L"Invalid JSON: unterminated string.";
+    return false;
+  }
+
+  bool read_null(std::wstring& err) {
+    skip_ws();
+    if (end - p >= 4 && p[0] == 'n' && p[1] == 'u' && p[2] == 'l' && p[3] == 'l') {
+      p += 4;
+      return true;
+    }
+    err = L"Invalid JSON: expected null.";
+    return false;
+  }
+
+  bool read_number(double& out, std::wstring& err) {
+    skip_ws();
+    if (eof()) {
+      err = L"Invalid JSON: expected number.";
+      return false;
+    }
+    const char* start = p;
+    // Basic JSON number chars: [-+0-9.eE]
+    if (*p == '-' || *p == '+') ++p;
+    while (!eof()) {
+      char c = *p;
+      if ((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-') {
+        ++p;
+        continue;
+      }
+      break;
+    }
+    if (p == start) {
+      err = L"Invalid JSON: expected number.";
+      return false;
+    }
+    char* endp = nullptr;
+    out = std::strtod(start, &endp);
+    if (!endp || endp != p) {
+      err = L"Invalid JSON: bad number.";
+      return false;
+    }
+    return true;
+  }
+
+  bool skip_value(std::wstring& err) {
+    skip_ws();
+    if (eof()) {
+      err = L"Invalid JSON: unexpected end.";
+      return false;
+    }
+    char c = *p;
+    if (c == '"') {
+      std::string tmp;
+      return read_string(tmp, err);
+    }
+    if (c == '{') {
+      ++p;
+      skip_ws();
+      if (consume('}')) return true;
+      while (true) {
+        std::string k;
+        if (!read_string(k, err)) return false;
+        if (!expect(':', err)) return false;
+        if (!skip_value(err)) return false;
+        if (consume('}')) return true;
+        if (!expect(',', err)) return false;
+      }
+    }
+    if (c == '[') {
+      ++p;
+      skip_ws();
+      if (consume(']')) return true;
+      while (true) {
+        if (!skip_value(err)) return false;
+        if (consume(']')) return true;
+        if (!expect(',', err)) return false;
+      }
+    }
+    if (c == 'n') return read_null(err);
+    // number
+    double d = 0;
+    return read_number(d, err);
+  }
+};
+
+static int json_to_int(double d) {
+  if (!std::isfinite(d)) return 0;
+  if (d > static_cast<double>(std::numeric_limits<int>::max())) return std::numeric_limits<int>::max();
+  if (d < static_cast<double>(std::numeric_limits<int>::min())) return std::numeric_limits<int>::min();
+  return static_cast<int>(d);
+}
+
+static uint32_t json_to_u32(double d) {
+  if (!std::isfinite(d) || d < 0) return 0;
+  if (d > 4294967295.0) return 0xffffffffu;
+  return static_cast<uint32_t>(d);
+}
+
+static bool parse_song_object(JsonReader& jr, uint32_t version, SongData& out, std::wstring& err) {
+  out = SongData{};
+  out.afp_data_count = 0;
+
+  if (!jr.expect('{', err)) return false;
+  if (jr.consume('}')) return true;
+  while (true) {
+    std::string key;
+    if (!jr.read_string(key, err)) return false;
+    if (!jr.expect(':', err)) return false;
+
+    if (key == "song_id") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.song_id = json_to_u32(d);
+    } else if (key == "title") {
+      if (!jr.read_string(out.title, err)) return false;
+    } else if (key == "title_ascii") {
+      if (!jr.read_string(out.title_ascii, err)) return false;
+    } else if (key == "genre") {
+      if (!jr.read_string(out.genre, err)) return false;
+    } else if (key == "artist") {
+      if (!jr.read_string(out.artist, err)) return false;
+    } else if (key == "subtitle") {
+      if (!jr.read_string(out.subtitle, err)) return false;
+    } else if (key == "texture_title") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.texture_title = json_to_u32(d);
+    } else if (key == "texture_artist") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.texture_artist = json_to_u32(d);
+    } else if (key == "texture_genre") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.texture_genre = json_to_u32(d);
+    } else if (key == "texture_load") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.texture_load = json_to_u32(d);
+    } else if (key == "texture_list") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.texture_list = json_to_u32(d);
+    } else if (key == "texture_subtitle") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.texture_subtitle = json_to_u32(d);
+    } else if (key == "font_idx") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.font_idx = json_to_u32(d);
+    } else if (key == "game_version") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.game_version = json_to_int(d);
+    } else if (key == "other_folder") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.other_folder = json_to_int(d);
+    } else if (key == "bemani_folder") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.bemani_folder = json_to_int(d);
+    } else if (key == "beginner_rec_folder") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.beginner_rec_folder = json_to_int(d);
+    } else if (key == "iidx_rec_folder") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.iidx_rec_folder = json_to_int(d);
+    } else if (key == "bemani_rec_folder") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.bemani_rec_folder = json_to_int(d);
+    } else if (key == "splittable_diff") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.splittable_diff = json_to_int(d);
+    } else if (key == "unk_unused") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.unk_unused = json_to_int(d);
+    } else if (key == "SPB_level") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.SPB_level = json_to_int(d);
+    } else if (key == "SPN_level") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.SPN_level = json_to_int(d);
+    } else if (key == "SPH_level") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.SPH_level = json_to_int(d);
+    } else if (key == "SPA_level") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.SPA_level = json_to_int(d);
+    } else if (key == "SPL_level") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.SPL_level = json_to_int(d);
+    } else if (key == "DPB_level") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.DPB_level = json_to_int(d);
+    } else if (key == "DPN_level") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.DPN_level = json_to_int(d);
+    } else if (key == "DPH_level") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.DPH_level = json_to_int(d);
+    } else if (key == "DPA_level") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.DPA_level = json_to_int(d);
+    } else if (key == "DPL_level") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.DPL_level = json_to_int(d);
+    } else if (key == "volume") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.volume = json_to_u32(d);
+    } else if (key == "SPB_ident") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.SPB_ident = json_to_int(d);
+    } else if (key == "SPN_ident") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.SPN_ident = json_to_int(d);
+    } else if (key == "SPH_ident") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.SPH_ident = json_to_int(d);
+    } else if (key == "SPA_ident") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.SPA_ident = json_to_int(d);
+    } else if (key == "SPL_ident") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.SPL_ident = json_to_int(d);
+    } else if (key == "DPB_ident") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.DPB_ident = json_to_int(d);
+    } else if (key == "DPN_ident") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.DPN_ident = json_to_int(d);
+    } else if (key == "DPH_ident") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.DPH_ident = json_to_int(d);
+    } else if (key == "DPA_ident") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.DPA_ident = json_to_int(d);
+    } else if (key == "DPL_ident") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.DPL_ident = json_to_int(d);
+    } else if (key == "bga_filename") {
+      if (!jr.read_string(out.bga_filename, err)) return false;
+    } else if (key == "bga_delay") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.bga_delay = json_to_int(d);
+    } else if (key == "afp_flag") {
+      double d = 0;
+      if (!jr.read_number(d, err)) return false;
+      out.afp_flag = json_to_u32(d);
+    } else if (key == "afp_data") {
+      if (!jr.expect('[', err)) return false;
+      int idx = 0;
+      if (!jr.consume(']')) {
+        while (true) {
+          jr.skip_ws();
+          if (jr.peek('n')) {
+            if (!jr.read_null(err)) return false;
+            if (idx < 10) out.afp_data[static_cast<size_t>(idx)].clear();
+          } else {
+            std::string s;
+            if (!jr.read_string(s, err)) return false;
+            if (idx < 10) out.afp_data[static_cast<size_t>(idx)] = std::move(s);
+          }
+          ++idx;
+          if (jr.consume(']')) break;
+          if (!jr.expect(',', err)) return false;
+        }
+      }
+      out.afp_data_count = std::min(idx, 10);
+    } else {
+      // Unknown key: skip its value.
+      if (!jr.skip_value(err)) return false;
+    }
+
+    if (jr.consume('}')) break;
+    if (!jr.expect(',', err)) return false;
+  }
+
+  // Ensure afp_data_count matches expected schema if present.
+  if (out.afp_data_count == 0) out.afp_data_count = 0;
+  (void)version;
+  return true;
+}
+
+static bool parse_musicdata_root(const std::string& json_utf8, uint32_t& out_version, std::vector<SongData>& out_songs, std::wstring& err) {
+  JsonReader jr(json_utf8);
+  out_songs.clear();
+  out_version = 0;
+
+  if (!jr.expect('{', err)) return false;
+  bool have_ver = false;
+  bool have_data = false;
+  if (!jr.consume('}')) {
+    while (true) {
+      std::string key;
+      if (!jr.read_string(key, err)) return false;
+      if (!jr.expect(':', err)) return false;
+
+      if (key == "data_ver") {
+        double d = 0;
+        if (!jr.read_number(d, err)) return false;
+        out_version = json_to_u32(d);
+        have_ver = true;
+      } else if (key == "data") {
+        if (!jr.expect('[', err)) return false;
+        have_data = true;
+        if (!jr.consume(']')) {
+          while (true) {
+            SongData song;
+            if (!parse_song_object(jr, out_version, song, err)) return false;
+            out_songs.emplace_back(std::move(song));
+            if (jr.consume(']')) break;
+            if (!jr.expect(',', err)) return false;
+          }
+        }
+      } else {
+        if (!jr.skip_value(err)) return false;
+      }
+
+      if (jr.consume('}')) break;
+      if (!jr.expect(',', err)) return false;
+    }
+  }
+
+  if (!have_ver) {
+    err = L"Missing data_ver.";
+    return false;
+  }
+  if (!have_data) {
+    err = L"Missing data array.";
+    return false;
+  }
+
+  jr.skip_ws();
+  if (!jr.eof()) {
+    err = L"Invalid JSON: trailing content.";
+    return false;
+  }
   return true;
 }
 
 }  // namespace
 
+}  // namespace
+
 bool musicdata_extract_json(const std::vector<uint8_t>& bin, std::string& out_json_utf8, std::wstring& err) {
   err.clear();
+  // Avoid repeated reallocations during pretty-print serialization.
+  // Typical output size is close to input size for music_*.bin, so this is a good lower bound.
   out_json_utf8.clear();
+  if (out_json_utf8.capacity() < bin.size() + (bin.size() / 4)) out_json_utf8.reserve(bin.size() + (bin.size() / 4));
   if (bin.size() < 16) {
     err = L"File too small.";
     return false;
@@ -829,56 +1315,56 @@ bool musicdata_extract_json(const std::vector<uint8_t>& bin, std::string& out_js
   size_t entry_sz = (version >= 32 && version != 80) ? 4u : 2u;
   br.skip(static_cast<size_t>(total_entries) * entry_sz);
 
-  cJSON* songs = cJSON_CreateArray();
+  // Streaming JSON writer (skips DOM construction) while preserving the exact
+  // indentation, commas, and key order of the legacy extract output.
+  out_json_utf8 += "{\n";
+  append_indent_units(out_json_utf8, 1);
+  append_escaped_json_string(out_json_utf8, "data_ver");
+  out_json_utf8 += ": ";
+  append_json_u32(out_json_utf8, version);
+  out_json_utf8 += ",\n";
+  append_indent_units(out_json_utf8, 1);
+  append_escaped_json_string(out_json_utf8, "data");
+  out_json_utf8 += ": ";
+
+  if (available_entries == 0) {
+    out_json_utf8 += "[]\n";
+    out_json_utf8 += '}';
+    return true;
+  }
+
+  out_json_utf8 += "[\n";
+  SongScratch scratch{};
   for (uint32_t i = 0; i < available_entries; ++i) {
     if (br.pos > br.size) break;
-    cJSON* song = read_one_song(br, version);
-    cJSON_AddItemToArray(songs, song);
+    append_indent_units(out_json_utf8, 2);
+    append_one_song_from_bin_python(out_json_utf8, br, version, scratch, 1);
+    if (i + 1 < available_entries)
+      out_json_utf8 += ",\n";
+    else
+      out_json_utf8 += '\n';
   }
-
-  cJSON* root = cJSON_CreateObject();
-  cJSON_AddNumberToObject(root, "data_ver", version);
-  cJSON_AddItemToObject(root, "data", songs);
-
-  if (!append_python_style_json_utf8(root, out_json_utf8)) {
-    cJSON_Delete(root);
-    err = L"JSON serialization failed.";
-    return false;
-  }
-  cJSON_Delete(root);
+  append_indent_units(out_json_utf8, 1);
+  out_json_utf8 += "]\n";
+  out_json_utf8 += '}';
   return true;
 }
 
 bool musicdata_create_bin(const std::string& json_utf8, std::vector<uint8_t>& out_bin, std::wstring& err) {
   err.clear();
   out_bin.clear();
-  cJSON* root = cJSON_Parse(json_utf8.c_str());
-  if (!root) {
-    err = L"Invalid JSON.";
+  uint32_t version = 0;
+  std::vector<SongData> songs;
+  if (!parse_musicdata_root(json_utf8, version, songs, err)) {
+    if (err.empty()) err = L"Invalid JSON (expected MusicDataPlugin schema).";
     return false;
   }
-  cJSON* ver_it = cJSON_GetObjectItemCaseSensitive(root, "data_ver");
-  if (!ver_it || !cJSON_IsNumber(ver_it)) {
-    cJSON_Delete(root);
-    err = L"Missing data_ver.";
-    return false;
-  }
-  uint32_t version = static_cast<uint32_t>(ver_it->valuedouble);
   if (!is_supported_version(version)) {
-    cJSON_Delete(root);
     err = L"Unsupported data_ver.";
     return false;
   }
-  cJSON* data = cJSON_GetObjectItemCaseSensitive(root, "data");
-  if (!data || !cJSON_IsArray(data)) {
-    cJSON_Delete(root);
-    err = L"Missing data array.";
-    return false;
-  }
-
   BinWriter bw;
-  writer_impl(version, bw, data);
-  cJSON_Delete(root);
+  writer_impl_typed(version, bw, songs);
   out_bin = std::move(bw.buf);
   return true;
 }

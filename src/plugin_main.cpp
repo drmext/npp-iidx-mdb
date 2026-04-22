@@ -111,17 +111,20 @@ static void set_buffer_utf8_text(UINT_PTR bufferID, const std::string& utf8) {
   activate_buffer(bufferID);
   HWND sci = current_scintilla();
   const LRESULT change_history_flags = SendMessage(sci, SCI_GETCHANGEHISTORY, 0, 0);
+  SendMessage(sci, WM_SETREDRAW, static_cast<WPARAM>(FALSE), 0);
   SendMessage(sci, SCI_SETCHANGEHISTORY, static_cast<WPARAM>(SC_CHANGE_HISTORY_DISABLED), 0);
   SendMessage(sci, SCI_SETUNDOCOLLECTION, 0, 0);
   SendMessage(sci, SCI_SETCODEPAGE, static_cast<WPARAM>(SC_CP_UTF8), 0);
   SendMessage(sci, SCI_SETTEXT, 0, reinterpret_cast<LPARAM>(utf8.c_str()));
-  SendMessage(g_npp._nppHandle, NPPM_SETBUFFERLANGTYPE, static_cast<WPARAM>(bufferID), static_cast<LPARAM>(NPP_L_JSON));
   sci = current_scintilla();
   SendMessage(sci, SCI_SETUNDOCOLLECTION, static_cast<WPARAM>(TRUE), 0);
   SendMessage(sci, SCI_SETSAVEPOINT, 0, 0);
   SendMessage(sci, SCI_EMPTYUNDOBUFFER, 0, 0);
   SendMessage(sci, SCI_SETCHANGEHISTORY, static_cast<WPARAM>(change_history_flags), 0);
+  SendMessage(g_npp._nppHandle, NPPM_SETBUFFERLANGTYPE, static_cast<WPARAM>(bufferID), static_cast<LPARAM>(NPP_L_JSON));
   SendMessage(g_npp._nppHandle, NPPM_MENUCOMMAND, 0, static_cast<LPARAM>(NPP_IDM_FORMAT_AS_UTF_8));
+  SendMessage(sci, WM_SETREDRAW, static_cast<WPARAM>(TRUE), 0);
+  RedrawWindow(sci, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
 }
 
 static void show_err(const wchar_t* msg) { MessageBoxW(g_npp._nppHandle, msg, kPluginName, MB_OK | MB_ICONWARNING); }
