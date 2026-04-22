@@ -20,7 +20,6 @@
 static const wchar_t kPluginName[] = L"MusicDataPlugin";
 
 static NppData g_npp;
-static HMODULE g_hModule = nullptr;
 static std::unordered_set<UINT_PTR> g_musicBinBuffers;
 static bool g_inPluginNotify = false;
 
@@ -119,9 +118,10 @@ static void set_buffer_utf8_text(UINT_PTR bufferID, const std::string& utf8) {
   SendMessage(g_npp._nppHandle, NPPM_SETBUFFERLANGTYPE, static_cast<WPARAM>(bufferID), static_cast<LPARAM>(NPP_L_JSON));
   sci = current_scintilla();
   SendMessage(sci, SCI_SETUNDOCOLLECTION, static_cast<WPARAM>(TRUE), 0);
-  SendMessage(sci, SCI_EMPTYUNDOBUFFER, 0, 0);
   SendMessage(sci, SCI_SETSAVEPOINT, 0, 0);
+  SendMessage(sci, SCI_EMPTYUNDOBUFFER, 0, 0);
   SendMessage(sci, SCI_SETCHANGEHISTORY, static_cast<WPARAM>(change_history_flags), 0);
+  SendMessage(g_npp._nppHandle, NPPM_MENUCOMMAND, 0, static_cast<LPARAM>(NPP_IDM_FORMAT_AS_UTF_8));
 }
 
 static void show_err(const wchar_t* msg) { MessageBoxW(g_npp._nppHandle, msg, kPluginName, MB_OK | MB_ICONWARNING); }
@@ -224,7 +224,4 @@ extern "C" __declspec(dllexport) LRESULT messageProc(UINT /*msg*/, WPARAM /*wPar
 
 extern "C" __declspec(dllexport) BOOL isUnicode() { return TRUE; }
 
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
-  if (reason == DLL_PROCESS_ATTACH) g_hModule = hModule;
-  return TRUE;
-}
+BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID) { return TRUE; }
